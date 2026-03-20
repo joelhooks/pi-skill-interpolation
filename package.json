@@ -1,0 +1,9 @@
+{
+  "name": "pi-skill-interpolation",
+  "version": "0.1.0",
+  "description": "pi extension for dynamic shell interpolation in skills",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./index.ts"]
+  }
+}
