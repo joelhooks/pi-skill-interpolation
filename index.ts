@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { execSync } from "child_process";
 import { existsSync, readFileSync } from "fs";
-import { basename, dirname, join } from "path";
+import { basename, dirname, join, resolve } from "path";
 import { homedir } from "os";
 
 const TIMEOUT_MS = 10_000;
@@ -133,8 +133,9 @@ export default function (pi: ExtensionAPI) {
 	pi.on("tool_result", async (event, ctx) => {
 		if (event.toolName !== "read") return;
 
-		const path = (event as any).input?.path as string | undefined;
+		let path = (event as any).input?.path as string | undefined;
 		if (!path) return;
+		path = resolve(ctx.cwd, path);
 		if (!path.endsWith("SKILL.md") && !basename(path).endsWith(".md")) return;
 
 		// Check if any content piece has interpolation patterns
