@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { execSync } from "child_process";
 import { existsSync, readFileSync } from "fs";
-import { basename, join } from "path";
+import { basename, dirname, join } from "path";
 import { homedir } from "os";
 
 const TIMEOUT_MS = 10_000;
@@ -36,11 +36,18 @@ function allowsBash(allowedTools: string | undefined): boolean {
 
 // --- interpolation ---
 
-function interpolate(content: string, cwd: string): string {
+function interpolate(content: string, cwd: string, skillDir?: string): string {
 	return content.replace(PATTERN, (_m, cmd: string) => {
 		try {
+			const env = skillDir
+				? {
+					...process.env,
+					CLAUDE_SKILL_DIR: skillDir,
+				  }
+				: process.env;
 			return execSync(cmd, {
 				cwd,
+				env,
 				timeout: TIMEOUT_MS,
 				encoding: "utf-8",
 				stdio: ["pipe", "pipe", "pipe"],
@@ -113,7 +120,8 @@ export default function (pi: ExtensionAPI) {
 		PATTERN.lastIndex = 0;
 
 		const projectDir = ctx.cwd;
-		const interpolated = interpolate(body.trim(), projectDir);
+		const skillDir = dirname(skillFile);
+		const interpolated = interpolate(body.trim(), projectDir, skillDir);
 		const block = `<skill name="${skillName}" location="${skillFile}">\nCommands run from project cwd: ${projectDir}.\n\n${interpolated}\n</skill>`;
 		const text = args ? `${block}\n\n${args}` : block;
 
@@ -149,7 +157,8 @@ export default function (pi: ExtensionAPI) {
 		if (!allowsBash(fm["allowed-tools"])) return;
 
 		const projectDir = ctx.cwd;
-		const interpolated = interpolate(textPiece.text, projectDir);
+		const skillDir = dirname(path);
+		const interpolated = interpolate(textPiece.text, projectDir, skillDir);
 
 		return {
 			content: event.content!.map((c: any) => (c === textPiece ? { type: "text", text: interpolated } : c)),
