@@ -136,8 +136,16 @@ export default function (pi: ExtensionAPI) {
 		if (!textPiece) return;
 		PATTERN.lastIndex = 0;
 
-		// Parse frontmatter from the file content to check allowed-tools
-		const { fm } = parseFrontmatter(textPiece.text);
+		// Parse frontmatter from the full file on disk so partial reads still
+		// see the real allowed-tools section at the top of SKILL.md.
+		let fullRaw: string;
+		try {
+			fullRaw = readFileSync(path, "utf-8");
+		} catch {
+			return;
+		}
+
+		const { fm } = parseFrontmatter(fullRaw);
 		if (!allowsBash(fm["allowed-tools"])) return;
 
 		const projectDir = ctx.cwd;
