@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { execSync } from "child_process";
 import { existsSync, readFileSync } from "fs";
-import { basename, dirname, join } from "path";
+import { basename, join } from "path";
 import { homedir } from "os";
 
 const TIMEOUT_MS = 10_000;
@@ -93,14 +93,14 @@ export default function (pi: ExtensionAPI) {
 	// Intercept before pi's built-in expansion. If the skill has
 	// allowed-tools with Bash, expand with interpolation.
 	// Otherwise fall through to pi's normal expansion.
-	pi.on("input", async (event) => {
+	pi.on("input", async (event, ctx) => {
 		if (!event.text.startsWith("/skill:")) return { action: "continue" as const };
 
 		const spaceIdx = event.text.indexOf(" ");
 		const skillName = spaceIdx === -1 ? event.text.slice(7) : event.text.slice(7, spaceIdx);
 		const args = spaceIdx === -1 ? "" : event.text.slice(spaceIdx + 1).trim();
 
-		const skillFile = findSkillFile(skillName, process.cwd());
+		const skillFile = findSkillFile(skillName, ctx.cwd);
 		if (!skillFile) return { action: "continue" as const };
 
 		const raw = readFileSync(skillFile, "utf-8");
@@ -112,9 +112,9 @@ export default function (pi: ExtensionAPI) {
 		// Reset regex lastIndex after test()
 		PATTERN.lastIndex = 0;
 
-		const baseDir = dirname(skillFile);
-		const interpolated = interpolate(body.trim(), baseDir);
-		const block = `<skill name="${skillName}" location="${skillFile}">\nReferences are relative to ${baseDir}.\n\n${interpolated}\n</skill>`;
+		const projectDir = ctx.cwd;
+		const interpolated = interpolate(body.trim(), projectDir);
+		const block = `<skill name="${skillName}" location="${skillFile}">\nCommands run from project cwd: ${projectDir}.\n\n${interpolated}\n</skill>`;
 		const text = args ? `${block}\n\n${args}` : block;
 
 		return { action: "transform" as const, text };
@@ -122,7 +122,7 @@ export default function (pi: ExtensionAPI) {
 
 	// Hook 2: model reads a SKILL.md via the read tool
 	// Interpolate !`command` patterns in the result before the model sees it.
-	pi.on("tool_result", async (event) => {
+	pi.on("tool_result", async (event, ctx) => {
 		if (event.toolName !== "read") return;
 
 		const path = (event as any).input?.path as string | undefined;
@@ -140,8 +140,8 @@ export default function (pi: ExtensionAPI) {
 		const { fm } = parseFrontmatter(textPiece.text);
 		if (!allowsBash(fm["allowed-tools"])) return;
 
-		const cwd = dirname(path);
-		const interpolated = interpolate(textPiece.text, cwd);
+		const projectDir = ctx.cwd;
+		const interpolated = interpolate(textPiece.text, projectDir);
 
 		return {
 			content: event.content!.map((c: any) => (c === textPiece ? { type: "text", text: interpolated } : c)),
