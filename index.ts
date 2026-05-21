@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { execSync } from "child_process";
 import { existsSync, readFileSync } from "fs";
-import { basename, dirname, join } from "path";
+import { basename, dirname, join, resolve } from "path";
 import { homedir } from "os";
 
 const TIMEOUT_MS = 10_000;
@@ -36,11 +36,18 @@ function allowsBash(allowedTools: string | undefined): boolean {
 
 // --- interpolation ---
 
-function interpolate(content: string, cwd: string): string {
+function interpolate(content: string, cwd: string, skillDir?: string): string {
 	return content.replace(PATTERN, (_m, cmd: string) => {
 		try {
+			const env = skillDir
+				? {
+					...process.env,
+					CLAUDE_SKILL_DIR: skillDir,
+				  }
+				: process.env;
 			return execSync(cmd, {
 				cwd,
+				env,
 				timeout: TIMEOUT_MS,
 				encoding: "utf-8",
 				stdio: ["pipe", "pipe", "pipe"],
@@ -93,14 +100,14 @@ export default function (pi: ExtensionAPI) {
 	// Intercept before pi's built-in expansion. If the skill has
 	// allowed-tools with Bash, expand with interpolation.
 	// Otherwise fall through to pi's normal expansion.
-	pi.on("input", async (event) => {
+	pi.on("input", async (event, ctx) => {
 		if (!event.text.startsWith("/skill:")) return { action: "continue" as const };
 
 		const spaceIdx = event.text.indexOf(" ");
 		const skillName = spaceIdx === -1 ? event.text.slice(7) : event.text.slice(7, spaceIdx);
 		const args = spaceIdx === -1 ? "" : event.text.slice(spaceIdx + 1).trim();
 
-		const skillFile = findSkillFile(skillName, process.cwd());
+		const skillFile = findSkillFile(skillName, ctx.cwd);
 		if (!skillFile) return { action: "continue" as const };
 
 		const raw = readFileSync(skillFile, "utf-8");
@@ -112,9 +119,10 @@ export default function (pi: ExtensionAPI) {
 		// Reset regex lastIndex after test()
 		PATTERN.lastIndex = 0;
 
-		const baseDir = dirname(skillFile);
-		const interpolated = interpolate(body.trim(), baseDir);
-		const block = `<skill name="${skillName}" location="${skillFile}">\nReferences are relative to ${baseDir}.\n\n${interpolated}\n</skill>`;
+		const projectDir = ctx.cwd;
+		const skillDir = dirname(skillFile);
+		const interpolated = interpolate(body.trim(), projectDir, skillDir);
+		const block = `<skill name="${skillName}" location="${skillFile}">\nCommands run from project cwd: ${projectDir}.\n\n${interpolated}\n</skill>`;
 		const text = args ? `${block}\n\n${args}` : block;
 
 		return { action: "transform" as const, text };
@@ -122,11 +130,12 @@ export default function (pi: ExtensionAPI) {
 
 	// Hook 2: model reads a SKILL.md via the read tool
 	// Interpolate !`command` patterns in the result before the model sees it.
-	pi.on("tool_result", async (event) => {
+	pi.on("tool_result", async (event, ctx) => {
 		if (event.toolName !== "read") return;
 
-		const path = (event as any).input?.path as string | undefined;
+		let path = (event as any).input?.path as string | undefined;
 		if (!path) return;
+		path = resolve(ctx.cwd, path);
 		if (!path.endsWith("SKILL.md") && !basename(path).endsWith(".md")) return;
 
 		// Check if any content piece has interpolation patterns
@@ -136,12 +145,21 @@ export default function (pi: ExtensionAPI) {
 		if (!textPiece) return;
 		PATTERN.lastIndex = 0;
 
-		// Parse frontmatter from the file content to check allowed-tools
-		const { fm } = parseFrontmatter(textPiece.text);
+		// Parse frontmatter from the full file on disk so partial reads still
+		// see the real allowed-tools section at the top of SKILL.md.
+		let fullRaw: string;
+		try {
+			fullRaw = readFileSync(path, "utf-8");
+		} catch {
+			return;
+		}
+
+		const { fm } = parseFrontmatter(fullRaw);
 		if (!allowsBash(fm["allowed-tools"])) return;
 
-		const cwd = dirname(path);
-		const interpolated = interpolate(textPiece.text, cwd);
+		const projectDir = ctx.cwd;
+		const skillDir = dirname(path);
+		const interpolated = interpolate(textPiece.text, projectDir, skillDir);
 
 		return {
 			content: event.content!.map((c: any) => (c === textPiece ? { type: "text", text: interpolated } : c)),
